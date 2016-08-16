@@ -9,18 +9,17 @@ import android.widget.Toast;
 import com.google.gson.JsonObject;
 import com.koushikdutta.async.future.FutureCallback;
 import com.koushikdutta.ion.Ion;
-import com.twilio.common.TwilioAccessManager;
-import com.twilio.common.TwilioAccessManagerFactory;
-import com.twilio.common.TwilioAccessManagerListener;
+import com.twilio.common.AccessManager;
 import com.twilio.ipmessaging.Channel;
 import com.twilio.ipmessaging.ChannelListener;
 import com.twilio.ipmessaging.Constants;
 import com.twilio.ipmessaging.ErrorInfo;
 import com.twilio.ipmessaging.Member;
 import com.twilio.ipmessaging.Message;
-import com.twilio.ipmessaging.TwilioIPMessagingClient;
-import com.twilio.ipmessaging.TwilioIPMessagingSDK;
+import com.twilio.ipmessaging.IPMessagingClient;
 
+import java.math.BigInteger;
+import java.security.SecureRandom;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -35,13 +34,13 @@ public class MessagingActivity extends AppCompatActivity {
     */
     final static String SERVER_TOKEN_URL = "http://localhost:8000/token.php";
 
-    final static String DEFAULT_CHANNEL_NAME = "channels2";
+    final static String DEFAULT_CHANNEL_NAME = "channels" + new BigInteger(65, new SecureRandom()).toString(32);
     final static String TAG = "TwilioIPMessaging";
 
 
 
-    private TwilioAccessManager mAccessManager;
-    private TwilioIPMessagingClient mMessagingClient;
+    private AccessManager mAccessManager;
+    private IPMessagingClient mMessagingClient;
 
     private Channel mGeneralChannel;
 
@@ -50,6 +49,7 @@ public class MessagingActivity extends AppCompatActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        Log.d(TAG, "onCreate");
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_messaging);
 
@@ -60,64 +60,34 @@ public class MessagingActivity extends AppCompatActivity {
     }
 
     private void retrieveAccessTokenfromServer() {
+        Log.d(TAG, "retrieveAccessTokenfromServer");
         Ion.with(this)
                 .load(SERVER_TOKEN_URL)
                 .asJsonObject()
                 .setCallback(new FutureCallback<JsonObject>() {
                     @Override
                     public void onCompleted(Exception e, JsonObject result) {
+                        Log.d(TAG, "Ion.onCompleted");
                         if (e == null) {
                             String identity = result.get("identity").getAsString();
                             String accessToken = result.get("token").getAsString();
 
                             setTitle(identity);
 
-                            mAccessManager = TwilioAccessManagerFactory.createAccessManager(accessToken,
-                                    mAccessManagerListener);
+                            mAccessManager = new AccessManager(getApplicationContext(), accessToken,
+                                mAccessManagerListener);
 
-                            TwilioIPMessagingClient.Properties props =
-                                    new TwilioIPMessagingClient.Properties(
-                                            TwilioIPMessagingClient.SynchronizationStrategy.ALL, 500);
+                            IPMessagingClient.Properties props =
+                                new IPMessagingClient.Properties.Builder()
+                                .setSynchronizationStrategy(IPMessagingClient.SynchronizationStrategy.ALL)
+                                .setInitialMessageCount(500).createProperties();
 
-                            mMessagingClient = TwilioIPMessagingSDK.createClient(mAccessManager, props,
+                            mMessagingClient = IPMessagingClient.create(getApplicationContext(), mAccessManager, props,
                                     mMessagingClientCallback);
 
-                            mMessagingClient.getChannels().loadChannelsWithListener(
-                                    new Constants.StatusListener() {
-                                        @Override
-                                        public void onSuccess() {
-                                            final Channel defaultChannel = mMessagingClient.getChannels()
-                                                    .getChannelByUniqueName(DEFAULT_CHANNEL_NAME);
-                                            if (defaultChannel != null) {
-                                                joinChannel(defaultChannel);
-                                            } else {
-                                                Map<String, Object> channelProps = new HashMap<>();
-                                                channelProps.put(Constants.CHANNEL_FRIENDLY_NAME,"General Chat Channel");
-                                                channelProps.put(Constants.CHANNEL_UNIQUE_NAME,DEFAULT_CHANNEL_NAME);
-                                                channelProps.put(Constants.CHANNEL_TYPE,Channel.ChannelType.CHANNEL_TYPE_PUBLIC);
-                                                mMessagingClient.getChannels().createChannel(channelProps, new Constants.CreateChannelListener() {
-                                                    @Override
-                                                    public void onCreated(final Channel channel) {
-                                                        if (channel != null) {
-                                                            Log.d(TAG, "Created default channel");
-                                                            MessagingActivity.this.runOnUiThread(new Runnable() {
-                                                                @Override
-                                                                public void run() {
-                                                                    joinChannel(channel);
-                                                                }
-                                                            });
-                                                        }
-                                                    }
-
-                                                    @Override
-                                                    public void onError(ErrorInfo errorInfo) {
-                                                        Log.e(TAG,"Error creating channel: " + errorInfo.getErrorText());
-                                                    }
-                                                });
-                                            }
-                                        }
-                                    });
+                            Log.d(TAG, "created mMessagingClient");
                         } else {
+                            Log.e(TAG, "Error syncing", e);
                             Toast.makeText(MessagingActivity.this,
                                     R.string.error_retrieving_access_token, Toast.LENGTH_SHORT)
                                     .show();
@@ -161,28 +131,59 @@ public class MessagingActivity extends AppCompatActivity {
         });
         }
 
-    private TwilioAccessManagerListener mAccessManagerListener = new TwilioAccessManagerListener() {
+    private AccessManager.Listener mAccessManagerListener = new AccessManager.Listener() {
         @Override
-        public void onTokenExpired(TwilioAccessManager twilioAccessManager) {
+        public void onTokenExpired(AccessManager twilioAccessManager) {
             Log.d(TAG, "Access token has expired");
         }
 
         @Override
-        public void onTokenUpdated(TwilioAccessManager twilioAccessManager) {
+        public void onTokenUpdated(AccessManager twilioAccessManager) {
             Log.d(TAG, "Access token has updated");
         }
 
         @Override
-        public void onError(TwilioAccessManager twilioAccessManager, String errorMessage) {
+        public void onError(AccessManager twilioAccessManager, String errorMessage) {
             Log.d(TAG, "Error with Twilio Access Manager: " + errorMessage);
         }
     };
 
-    private Constants.CallbackListener<TwilioIPMessagingClient> mMessagingClientCallback =
-            new Constants.CallbackListener<TwilioIPMessagingClient>() {
+    private Constants.CallbackListener<IPMessagingClient> mMessagingClientCallback =
+            new Constants.CallbackListener<IPMessagingClient>() {
                 @Override
-                public void onSuccess(TwilioIPMessagingClient twilioIPMessagingClient) {
+                public void onSuccess(IPMessagingClient twilioIPMessagingClient) {
                     Log.d(TAG, "Success creating Twilio IP Messaging Client");
+                    Log.d(TAG, "channels synced");
+                    final Channel defaultChannel = twilioIPMessagingClient.getChannels()
+                            .getChannelByUniqueName(DEFAULT_CHANNEL_NAME);
+                    if (defaultChannel != null) {
+                        joinChannel(defaultChannel);
+                    } else {
+                        Log.d(TAG, "creating channel");
+                        Map<String, Object> channelProps = new HashMap<>();
+                        channelProps.put(Constants.CHANNEL_FRIENDLY_NAME,"General Chat Channel");
+                        channelProps.put(Constants.CHANNEL_UNIQUE_NAME,DEFAULT_CHANNEL_NAME);
+                        channelProps.put(Constants.CHANNEL_TYPE,Channel.ChannelType.PUBLIC);
+                        twilioIPMessagingClient.getChannels().createChannel(channelProps, new Constants.CreateChannelListener() {
+                            @Override
+                            public void onCreated(final Channel channel) {
+                                if (channel != null) {
+                                    Log.d(TAG, "Created default channel");
+                                    MessagingActivity.this.runOnUiThread(new Runnable() {
+                                        @Override
+                                        public void run() {
+                                        joinChannel(channel);
+                                        }
+                                    });
+                                }
+                            }
+
+                            @Override
+                            public void onError(ErrorInfo errorInfo) {
+                                Log.e(TAG,"Error creating channel: " + errorInfo.getErrorText());
+                            }
+                        });
+                    }
                 }
             };
 
